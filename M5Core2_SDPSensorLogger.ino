@@ -1,5 +1,8 @@
 #include <M5Core2.h>
 
+#include "Adafruit_Sensor.h"
+#include <Adafruit_BMP280.h>
+
 #include <math.h>
 #include <unistd.h>
 #include <string.h>
@@ -14,21 +17,23 @@
 #include "sdcard.h"
 #include "record.h"
 #include "onlinemean.h"
+#include "SHT3x.h"
 
-#define READ_SENSORS_PRIORITY    3
-#define WRITE_TO_SDCARD_PRIORITY 2
+#define SDP_READ_PRIORITY             3
+#define SDP_WRITE2SDCARD_PRIORITY     2
+#define BMP280_PRIORITY               1
+
+#define ESP32_SDPSENSOR_DEBUG         0
 
 #define SDPSENSOR_SAMPLE_PERIOUD_US   1000
+#define BMP280_SAMPLE_PERIOD_MS       2000
 
 /**
- * Buffer recordings to 512 bytes,
- * which corresponds to the sector
- * size of an SD card.
- * One record occupies 8+2 bytes.
+ * Buffer SDP records before writing to an SD card.
+ * One record occupies 8 + 2 bytes.
  */
-#define RECORDS_BUFFER_SIZE      52
+#define RECORDS_BUFFER_SIZE           52
 
-#define ESP32_SDPSENSOR_DEBUG    0
 
 static esp_timer_handle_t sdp_timer;
 
@@ -41,6 +46,9 @@ static QueueHandle_t xQueueSDP;
 static QueueHandle_t xQueueSDPErrors;
 static uint64_t records_received = 0;
 
+static TaskHandle_t bmp_task_handle;
+static int8_t bmp_initialized = 0;
+
 static const char *TAG = "main";
 
 static void sdptask_read_sensor();
@@ -52,7 +60,9 @@ static FILE* open_fileSDP();
 esp_err_t write_sdpinfo();
 
 
-SDPSensor sdp(0x25);
+SDPSensor sdp(0x25, 0);
+SHT3x sht30(0x44, &Wire1);
+Adafruit_BMP280 bmp(&Wire1);
 
 
 static void sdp_timer_callback(void* arg)
@@ -188,8 +198,8 @@ void record_sdp_start() {
   xQueueSDP = xQueueCreate( 100 * RECORDS_BUFFER_SIZE, sizeof(SDPRecord) );
   xQueueSDPErrors = xQueueCreate( 100, sizeof(esp_err_t) );
 
-  xTaskCreatePinnedToCore(sdptask_read_sensor, "sdp_read", 2048, NULL, READ_SENSORS_PRIORITY, &read_sensor_task_handle, APP_CPU_NUM);
-  xTaskCreatePinnedToCore(sdptask_write, "sdp_write", 4096, NULL, WRITE_TO_SDCARD_PRIORITY, &write_task_handle, PRO_CPU_NUM);
+  xTaskCreatePinnedToCore(sdptask_read_sensor, "sdp_read", 2048, NULL, SDP_READ_PRIORITY, &read_sensor_task_handle, APP_CPU_NUM);
+  xTaskCreatePinnedToCore(sdptask_write, "sdp_write", 4096, NULL, SDP_WRITE2SDCARD_PRIORITY, &write_task_handle, PRO_CPU_NUM);
 
   ESP_ERROR_CHECK(esp_timer_start_periodic(sdp_timer, SDPSENSOR_SAMPLE_PERIOUD_US));
 
@@ -202,6 +212,73 @@ void record_sdp_stop() {
   vTaskDelete(write_task_handle);
   ESP_LOGW(TAG, "SDP tasks stopped");
 }
+
+
+static FILE* open_fileBMP() {
+  char fpath[128];
+  snprintf(fpath, sizeof(fpath), "%s/BMP.bin", sdcard_get_record_dir());
+  FILE *file = fopen(fpath, "w");
+  if (file != NULL) {
+    ESP_LOGI(TAG, "Opened file for writing atm. pressure: '%s'", fpath);
+  }
+  return file;
+}
+
+
+/**
+ * @brief BMP280 atm. pressure read-out and dump to the SD card
+ */
+static void bmp280_task(void *not_used)
+{
+  BMPRecord bmp_record;
+
+  FILE *fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
+  ESP_LOGI(TAG, "BMP task started");
+
+  while (1) {
+    bmp_record.pressure = bmp.readPressure();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    if (!sht30.readTemperatureHumidity(&bmp_record.temperature, &bmp_record.humidity)) {
+      ESP_LOGE(TAG, "sht30.readTemperatureHumidity failed");
+      vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
+      continue;
+    }
+
+    M5.lcd.setCursor(0,50);
+    M5.lcd.fillRect(0,50,100,60,BLACK);
+    M5.Lcd.printf("Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%2.0fPa\r\n",
+                   bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+    ESP_LOGI(TAG, "Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%.0fPa\r\n",
+                   bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+
+    bmp_record.time = esp_timer_get_time();
+    fwrite(&bmp_record, sizeof(BMPRecord), 1, fileBMP);
+    fflush(fileBMP);
+    fsync(fileno(fileBMP));
+    vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
+  }
+}
+
+
+esp_err_t record_bmp_start() {
+  Wire1.begin(32, 33);
+  Wire1.setClock(400000);
+  if (!bmp.begin(0x76)) {
+    ESP_LOGE(TAG, "Failed to init a BMP280 sensor");
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Initialized a BMP280 sensor");
+  bmp_initialized = 1;
+  xTaskCreatePinnedToCore(bmp280_task, "bmp280", 8000, NULL, BMP280_PRIORITY, &bmp_task_handle, PRO_CPU_NUM);
+  return ESP_OK;
+}
+
+
+void record_bmp_stop() {
+  if (bmp_initialized) vTaskDelete(bmp_task_handle);
+  ESP_LOGI(TAG, "BMP task stopped");
+}
+
 
 /**
  * Writes SDP sensor info to the SD card.
@@ -238,8 +315,9 @@ void setup() {
   bool LCDEnable = true;
   bool SDEnable = false;
   bool SerialEnable = true;
-  bool I2CEnablePortA = false;
+  bool I2CEnablePortA = false;  // BMP280 sensor
   M5.begin(LCDEnable, SDEnable, SerialEnable, I2CEnablePortA);
+  M5.lcd.setTextSize(2);
 
   //Allow other core to finish initialization
   vTaskDelay(pdMS_TO_TICKS(100));
@@ -259,6 +337,7 @@ void setup() {
   //sdcard_listdir(sdcard_mount_point, 0);
 
   record_sdp_start();
+  record_bmp_start();
 }
 
 
