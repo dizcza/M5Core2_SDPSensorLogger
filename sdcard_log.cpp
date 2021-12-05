@@ -24,7 +24,7 @@ size_t sdcard_log(char *msg) {
 	// closes the file with sdcard_log_stop().
     size_t sz = 0;
 	if (log_active && log_file) {
-	    sz = log_file.print(msg);
+	    sz = log_file.println(msg);
 	}
     xSemaphoreGive(sync_sdcard_log);
     return sz;

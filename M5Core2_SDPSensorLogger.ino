@@ -45,6 +45,8 @@ static File fileBMP;
 
 static QueueHandle_t xQueueSDP;
 static QueueHandle_t xQueueSDPErrors;
+static xSemaphoreHandle logSemaphore = NULL;
+
 static uint64_t records_received = 0;
 
 static TaskHandle_t bmp_task_handle;
@@ -63,9 +65,51 @@ esp_err_t write_sdpinfo(fs::FS &fs);
 static void bmp280_read(File fileBMP);
 static void bmp280_task(void *not_used);
 
+static void log_app(esp_log_level_t level, const char *format, ...);
+static const char *LOG_LEVEL_CHR = "NEWIDV";
+
+#define log_app_e(fmt, ...) do {log_e(fmt, ##__VA_ARGS__); log_app(ESP_LOG_ERROR, fmt, ##__VA_ARGS__);} while(0)
+#define log_app_w(fmt, ...) do {log_w(fmt, ##__VA_ARGS__); log_app(ESP_LOG_WARN, fmt, ##__VA_ARGS__);} while(0)
+#define log_app_i(fmt, ...) do {log_i(fmt, ##__VA_ARGS__); log_app(ESP_LOG_INFO, fmt, ##__VA_ARGS__);} while(0)
+
+
 SDPSensor sdp(0x25, 0);
 SHT3x sht30(0x44, &Wire1);
 Adafruit_BMP280 bmp(&Wire1);
+
+
+static void log_app(esp_log_level_t level, const char *format, ...) {
+  static char log_buffer[512];
+
+  xSemaphoreTake(logSemaphore, portMAX_DELAY);
+  va_list args;
+  va_start( args, format );
+  size_t offset = snprintf(log_buffer, sizeof(log_buffer), "%c (%lld) ",
+                           LOG_LEVEL_CHR[level], esp_timer_get_time());
+  offset += vsnprintf(log_buffer + offset, sizeof(log_buffer) - offset, format, args);
+  uint16_t color = LIGHTGREY;
+  switch (level) {
+    case ESP_LOG_ERROR:
+      color = RED;
+      break;
+    case ESP_LOG_WARN:
+      color = ORANGE;
+      break;
+    case ESP_LOG_INFO:
+      color = GREEN;
+      break;
+  }
+  M5.Lcd.setTextColor(color);
+  M5.Lcd.setTextSize(1);
+  if (M5.Lcd.getCursorY() >= 240) {
+    M5.Lcd.clear();
+    M5.Lcd.setCursor(0, 3 * 8);  // skip the BMP logging
+  }
+  M5.Lcd.println(log_buffer);
+  sdcard_log(log_buffer);
+  va_end( args );
+  xSemaphoreGive(logSemaphore);
+}
 
 
 static void sdp_timer_callback(void* arg)
@@ -100,7 +144,7 @@ static File open_fileSDP() {
   snprintf(fpath, sizeof(fpath), "%s/SDP.bin", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
   if (file) {
-    ESP_LOGI(TAG, "Opened file for writing diff pressure: '%s'", fpath);
+    log_app_i("Opened file for writing diff pressure: '%s'", fpath);
   }
   return file;
 }
@@ -113,7 +157,7 @@ static void xqueue_check_errors() {
   const uint64_t n_total = records_received + uxQueueMessagesWaiting(xQueueSDP);
   while (uxQueueMessagesWaiting(xQueueSDPErrors)) {
     if (xQueueReceive(xQueueSDPErrors, &err, pdMS_TO_TICKS(10)) == pdTRUE) {
-      ESP_LOGW(TAG, "[%llu / %llu] SDP sensor read failed: %s",
+      log_app_w("[%llu / %llu] SDP sensor read failed: %s",
            errors_cnt, n_total, esp_err_to_name(err));
       errors_cnt++;
     }
@@ -159,17 +203,14 @@ static void sdptask_write(void *not_used) {
           if (dt > dt_max) dt_max = dt;
         }
       }
-      written_cnt = fileSDP.write((const uint8_t*) sdp_records, sizeof(SDPRecord) * RECORDS_BUFFER_SIZE);
-      if (written_cnt != sizeof(SDPRecord) * RECORDS_BUFFER_SIZE) {
-        ESP_LOGE(TAG, "fwrite(recordsDP) failed");
-      }
+      fileSDP.write((const uint8_t*) sdp_records, sizeof(SDPRecord) * RECORDS_BUFFER_SIZE);
     } while (uxQueueMessagesWaiting(xQueueSDP) >= RECORDS_BUFFER_SIZE);
     fileSDP.flush();
 
     if (messages_cnt > messages_cnt_max) messages_cnt_max = messages_cnt;
 
 #if ESP32_SDPSENSOR_DEBUG
-    ESP_LOGI(TAG, "[q %3u, m %u] read=%.3f (max=%lld us); dp (%d, %d)",
+    log_app_i("[q %3u, m %u] read=%.3f (max=%lld us); dp (%d, %d)",
         messages_cnt, messages_cnt_max,
         OnlineMean_GetMean(&dt_mean), dt_max, dp_min, dp_max);
 #endif  /* ESP32_SDPSENSOR_DEBUG */
@@ -195,13 +236,13 @@ void record_sdp_start() {
 
   fileSDP = open_fileSDP();    // diff pressure
   if (!fileSDP) {
-    ESP_LOGE(TAG, "Could not open a file for writing SDP data");
+    log_app_e("Could not open a file for writing SDP data");
     esp_restart();
   }
 
   float temperature;
   if (sdp.readDiffPressureTemperature(NULL, &temperature) == ESP_OK) {
-    ESP_LOGI(TAG, "SDP sensor t° %.1f", temperature);
+    log_app_i("SDP sensor t° %.1f", temperature);
   }
 
   xQueueSDP = xQueueCreate( 100 * RECORDS_BUFFER_SIZE, sizeof(SDPRecord) );
@@ -212,14 +253,14 @@ void record_sdp_start() {
 
   ESP_ERROR_CHECK(esp_timer_start_periodic(sdp_timer, SDPSENSOR_SAMPLE_PERIOUD_US));
 
-  ESP_LOGI(TAG, "SDP tasks started");
+  log_app_i("SDP tasks started");
 }
 
 
 void record_sdp_stop() {
   vTaskDelete(read_sensor_task_handle);
   vTaskDelete(write_task_handle);
-  ESP_LOGW(TAG, "SDP tasks stopped");
+  log_app_w("SDP tasks stopped");
 }
 
 
@@ -228,7 +269,7 @@ static File open_fileBMP() {
   snprintf(fpath, sizeof(fpath), "%s/BMP.bin", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
   if (file) {
-    ESP_LOGI(TAG, "Opened file for writing atm. pressure: '%s'", fpath);
+    log_app_i("Opened file for writing atm. pressure: '%s'", fpath);
   }
   return file;
 }
@@ -242,7 +283,7 @@ static void bmp280_task(void *not_used)
   BMPRecord bmp_record;
 
 //  File fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
-  ESP_LOGI(TAG, "BMP task started");
+  log_app_i("BMP task started");
 
   while (1) {
     bmp280_read(fileBMP);
@@ -254,11 +295,11 @@ static void bmp280_task(void *not_used)
 esp_err_t record_bmp_start() {
   Wire1.begin(32, 33);
   if (!bmp.begin(0x76)) {
-    ESP_LOGE(TAG, "Failed to init a BMP280 sensor");
+    log_app_e("Failed to init a BMP280 sensor");
     return ESP_FAIL;
   }
   bmp_initialized = true;
-  ESP_LOGI(TAG, "Initialized a BMP280 sensor");
+  log_app_i("Initialized a BMP280 sensor");
   fileBMP = open_fileBMP();
 //  xTaskCreatePinnedToCore(bmp280_task, "bmp280", 4096, NULL, BMP280_PRIORITY, &bmp_task_handle, PRO_CPU_NUM);
   return ESP_OK;
@@ -271,14 +312,18 @@ static void bmp280_read(File fileBMP) {
   BMPRecord bmp_record;
   bmp_record.pressure = bmp.readPressure();
   if (!sht30.readTemperatureHumidity(&bmp_record.temperature, &bmp_record.humidity)) {
-    ESP_LOGE(TAG, "sht30.readTemperatureHumidity failed");
+    log_app_e("bmp_read failed");
     return;
   }
 
-  M5.lcd.setCursor(0,50);
-  M5.lcd.fillRect(0,50,100,60,BLACK);
-  M5.Lcd.printf("Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%2.0fPa\r\n",
-                 bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+  int16_t x = M5.lcd.getCursorX();
+  int16_t y = M5.lcd.getCursorY();
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.setTextColor(LIGHTGREY);
+  M5.Lcd.setTextSize(2);
+  M5.lcd.fillRect(0, 0, 320, 16, BLACK);
+  M5.Lcd.printf("T %3.1f H %2.0f%% P %6.0f Pa\n", bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+  M5.Lcd.setCursor(x, y);
 
   bmp_record.time = esp_timer_get_time();
   fileBMP.write((const uint8_t*) &bmp_record, sizeof(BMPRecord));
@@ -288,7 +333,7 @@ static void bmp280_read(File fileBMP) {
 
 void record_bmp_stop() {
   if (bmp_initialized) vTaskDelete(bmp_task_handle);
-  ESP_LOGI(TAG, "BMP task stopped");
+  log_app_i("BMP task stopped");
 }
 
 
@@ -317,19 +362,23 @@ esp_err_t write_sdpinfo(fs::FS &fs) {
   file.printf("Serial: 0x%016llX\n", serial);
   file.close();
 
-  ESP_LOGI(TAG, "Wrote sensor info to '%s'", fpath);
+  log_app_i("Wrote sensor info to '%s'", fpath);
   return ESP_OK;
 }
 
 
 
 void setup() {
+  logSemaphore = xSemaphoreCreateBinary();
+  xSemaphoreGive(logSemaphore);
+  
   bool LCDEnable = true;
   bool SDEnable = true;
   bool SerialEnable = true;
   bool I2CEnablePortA = false;  // BMP280 sensor
   M5.begin(LCDEnable, SDEnable, SerialEnable, I2CEnablePortA);
-  M5.lcd.setTextSize(2);
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.print("\n");  // reserve space for BMP logging
 
   sdcard_init(SD);
 //  sdcard_listdir(SD, "/RECORDS/063");
@@ -342,6 +391,10 @@ void setup() {
 
 void loop() {
   bmp280_read(fileBMP);
+  if (M5.Lcd.getCursorY() >= 240) {
+    M5.Lcd.clear();
+    M5.Lcd.setCursor(0, 3 * 8);  // skip the BMP logging
+  }
   M5.update();
-  vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
+  vTaskDelay(pdMS_TO_TICKS(100));
 }
