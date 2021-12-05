@@ -16,11 +16,20 @@
 
 static uint32_t m_record_id = 0;
 static char *m_sdcard_record_dir = NULL;
-static char *m_sdcard_records_root = "/RECORDS";
+static const char *m_sdcard_records_root = "/RECORDS";
 
 static const char *TAG = "sdcard";
 
-static int sdcard_count_dirs(char *dirpath);
+static int sdcard_count_dirs(fs::FS &fs, const char *dirpath);
+static void sdcard_print_info(fs::SDFS &fs);
+static void sdcard_create_record_dir(fs::FS &fs);
+
+
+void sdcard_init(fs::SDFS &fs) {
+    sdcard_print_info(fs);
+    sdcard_create_record_dir(fs);
+    sdcard_log_start(fs);
+}
 
 
 void sdcard_listdir(fs::FS &fs, const char *dirname, uint8_t levels){
@@ -56,7 +65,7 @@ void sdcard_listdir(fs::FS &fs, const char *dirname, uint8_t levels){
 }
 
 
-static int sdcard_count_dirs(fs::FS &fs, char *dirpath) {
+static int sdcard_count_dirs(fs::FS &fs, const char *dirpath) {
     int dircnt = 0;
     File root = fs.open(dirpath);
     if (!root || !root.isDirectory()) return 0;
@@ -71,7 +80,7 @@ static int sdcard_count_dirs(fs::FS &fs, char *dirpath) {
 }
 
 
-void sdcard_create_record_dir(fs::FS &fs) {
+static void sdcard_create_record_dir(fs::FS &fs) {
     char rec_folder[128];
 
     if (!fs.exists(m_sdcard_records_root)) {
@@ -112,7 +121,7 @@ const char* sdcard_get_record_dir() {
 }
 
 
-void sdcard_print_info(fs::SDFS &fs) {
+static void sdcard_print_info(fs::SDFS &fs) {
     uint64_t total = fs.cardSize();
     uint64_t used = fs.usedBytes();
     uint64_t freeMb = (total - used) >> 20;
@@ -139,7 +148,7 @@ void sdcard_print_info(fs::SDFS &fs) {
 
 esp_err_t sdcard_print_content(fs::FS &fs, char *fpath) {
     File f = fs.open(fpath);
-    if (f == NULL) {
+    if (f) {
         ESP_LOGW(TAG, "No such file: '%s'", fpath);
         return ESP_ERR_NOT_FOUND;
     }

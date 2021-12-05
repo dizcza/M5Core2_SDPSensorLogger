@@ -99,7 +99,7 @@ static File open_fileSDP() {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/SDP.bin", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
-  if (file != NULL) {
+  if (file) {
     ESP_LOGI(TAG, "Opened file for writing diff pressure: '%s'", fpath);
   }
   return file;
@@ -227,7 +227,7 @@ static File open_fileBMP() {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/BMP.bin", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
-  if (file != NULL) {
+  if (file) {
     ESP_LOGI(TAG, "Opened file for writing atm. pressure: '%s'", fpath);
   }
   return file;
@@ -302,7 +302,7 @@ esp_err_t write_sdpinfo(fs::FS &fs) {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/SENSOR.txt", sdcard_get_record_dir());
   File file = fs.open(fpath, FILE_WRITE);
-  if (file == NULL) {
+  if (!file) {
     return ESP_ERR_NOT_FOUND;
   }
 
@@ -330,10 +330,8 @@ void setup() {
   bool I2CEnablePortA = false;  // BMP280 sensor
   M5.begin(LCDEnable, SDEnable, SerialEnable, I2CEnablePortA);
   M5.lcd.setTextSize(2);
-  M5.Lcd.fillScreen(GREEN);
 
-  sdcard_print_info(SD);
-  sdcard_create_record_dir(SD);
+  sdcard_init(SD);
 //  sdcard_listdir(SD, "/RECORDS/063");
 //  sdcard_print_content(SD, "/RECORDS/063/SENSOR.txt");
 

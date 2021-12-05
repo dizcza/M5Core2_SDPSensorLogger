@@ -25,7 +25,7 @@ bool SHT3x::readTemperatureHumidity(float *temperature, float *humidity)
   delay(200);
 
   // Request 6 bytes of data
-  this->wire->requestFrom(i2c_addr, 6);
+  this->wire->requestFrom(i2c_addr, (uint8_t) 6);
 
   // Read 6 bytes of data
   // cTemp msb, cTemp lsb, cTemp crc, humidity msb, humidity lsb, humidity crc
