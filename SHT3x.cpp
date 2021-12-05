@@ -1,7 +1,3 @@
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-
 #include "SHT3x.h"
 
 
@@ -23,11 +19,10 @@ bool SHT3x::readTemperatureHumidity(float *temperature, float *humidity)
   this->wire->write(0x06);
   // Stop I2C transmission
   if (this->wire->endTransmission()!=0) {
-    ESP_LOGE("sht3x", "Wire.endTransmission() err");
     return false;  
   }
 
-  vTaskDelay(pdMS_TO_TICKS(500));
+  delay(200);
 
   // Request 6 bytes of data
   this->wire->requestFrom(i2c_addr, 6);
@@ -38,10 +33,9 @@ bool SHT3x::readTemperatureHumidity(float *temperature, float *humidity)
     data[i]=this->wire->read();
   };
 
-  vTaskDelay(pdMS_TO_TICKS(50));  
+  delay(50);
   
   if (this->wire->available()!=0) {
-    ESP_LOGE("sht3x", "Wire not available");
     return false;
   }
 
@@ -49,5 +43,5 @@ bool SHT3x::readTemperatureHumidity(float *temperature, float *humidity)
   if (temperature != NULL) *temperature = ((((data[0] * 256.0) + data[1]) * 175) / 65535.0) - 45;
   if (humidity != NULL) *humidity = ((((data[3] * 256.0) + data[4]) * 100) / 65535.0);
 
-  return 0;
+  return true;
 }

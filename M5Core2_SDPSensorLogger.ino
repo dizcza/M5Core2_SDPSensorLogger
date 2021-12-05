@@ -41,13 +41,14 @@ static TaskHandle_t read_sensor_task_handle;
 static TaskHandle_t write_task_handle;
 
 static FILE *fileSDP = NULL;   // SDP sensor: diff pressure
+static FILE *fileBMP = NULL;
 
 static QueueHandle_t xQueueSDP;
 static QueueHandle_t xQueueSDPErrors;
 static uint64_t records_received = 0;
 
 static TaskHandle_t bmp_task_handle;
-static int8_t bmp_initialized = 0;
+static bool bmp_initialized = false;
 
 static const char *TAG = "main";
 
@@ -58,7 +59,8 @@ static void sdp_timer_callback(void* arg);
 static void xqueue_check_errors();
 static FILE* open_fileSDP();
 esp_err_t write_sdpinfo();
-
+static void bmp280_read(FILE *fileBMP);
+static void bmp280_task(void *not_used);
 
 SDPSensor sdp(0x25, 0);
 SHT3x sht30(0x44, &Wire1);
@@ -178,6 +180,13 @@ static void sdptask_write(void *not_used) {
 
 
 void record_sdp_start() {
+  sdp.initI2C(14, 13);  // PortC;
+  while (sdp.stopContinuous() != ESP_OK);
+  while (sdp.begin() != ESP_OK);
+  while (sdp.startContinuous() != ESP_OK);
+
+  write_sdpinfo();
+  
   const esp_timer_create_args_t sdp_timer_args = {
             .callback = &sdp_timer_callback,
             .name = "sdp_timer"
@@ -232,29 +241,11 @@ static void bmp280_task(void *not_used)
 {
   BMPRecord bmp_record;
 
-  FILE *fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
+//  FILE *fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
   ESP_LOGI(TAG, "BMP task started");
 
   while (1) {
-    bmp_record.pressure = bmp.readPressure();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    if (!sht30.readTemperatureHumidity(&bmp_record.temperature, &bmp_record.humidity)) {
-      ESP_LOGE(TAG, "sht30.readTemperatureHumidity failed");
-      vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
-      continue;
-    }
-
-    M5.lcd.setCursor(0,50);
-    M5.lcd.fillRect(0,50,100,60,BLACK);
-    M5.Lcd.printf("Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%2.0fPa\r\n",
-                   bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
-    ESP_LOGI(TAG, "Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%.0fPa\r\n",
-                   bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
-
-    bmp_record.time = esp_timer_get_time();
-    fwrite(&bmp_record, sizeof(BMPRecord), 1, fileBMP);
-    fflush(fileBMP);
-    fsync(fileno(fileBMP));
+    bmp280_read(fileBMP);
     vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
   }
 }
@@ -262,15 +253,41 @@ static void bmp280_task(void *not_used)
 
 esp_err_t record_bmp_start() {
   Wire1.begin(32, 33);
-  Wire1.setClock(400000);
   if (!bmp.begin(0x76)) {
     ESP_LOGE(TAG, "Failed to init a BMP280 sensor");
     return ESP_FAIL;
   }
+  bmp_initialized = true;
   ESP_LOGI(TAG, "Initialized a BMP280 sensor");
-  bmp_initialized = 1;
-  xTaskCreatePinnedToCore(bmp280_task, "bmp280", 8000, NULL, BMP280_PRIORITY, &bmp_task_handle, PRO_CPU_NUM);
+  fileBMP = open_fileBMP();
+//  xTaskCreatePinnedToCore(bmp280_task, "bmp280", 4096, NULL, BMP280_PRIORITY, &bmp_task_handle, PRO_CPU_NUM);
   return ESP_OK;
+}
+
+
+static void bmp280_read(FILE *fileBMP) {
+  if (!bmp_initialized) return;
+  
+  BMPRecord bmp_record;
+  bmp_record.pressure = bmp.readPressure();
+  if (!sht30.readTemperatureHumidity(&bmp_record.temperature, &bmp_record.humidity)) {
+    ESP_LOGE(TAG, "sht30.readTemperatureHumidity failed");
+    return;
+  }
+
+  M5.lcd.setCursor(0,50);
+  M5.lcd.fillRect(0,50,100,60,BLACK);
+  M5.Lcd.printf("Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%2.0fPa\r\n",
+                 bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+  M5.update();
+
+  ESP_LOGI(TAG, "Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%.0fPa\r\n",
+                 bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
+
+  bmp_record.time = esp_timer_get_time();
+  fwrite(&bmp_record, sizeof(BMPRecord), 1, fileBMP);
+  fflush(fileBMP);
+  fsync(fileno(fileBMP));
 }
 
 
@@ -318,21 +335,16 @@ void setup() {
   bool I2CEnablePortA = false;  // BMP280 sensor
   M5.begin(LCDEnable, SDEnable, SerialEnable, I2CEnablePortA);
   M5.lcd.setTextSize(2);
-
-  //Allow other core to finish initialization
-  vTaskDelay(pdMS_TO_TICKS(100));
+  M5.Lcd.fillScreen(GREEN);
   
   if (sdcard_init() != ESP_OK) {
     ESP_LOGE(TAG, "Failed to init the SD card");
     return;
   }
 
-  sdp.initI2C(14, 13);  // PortC;
-  while (sdp.stopContinuous() != ESP_OK);
-  while (sdp.begin() != ESP_OK);
-  while (sdp.startContinuous() != ESP_OK);
 
-  write_sdpinfo();
+  M5.lcd.println(F("ENV Unit(SHT30 and BMP280) test...\n"));
+  M5.update();  //Read the press state of the key.  读取按键 A, B, C 的状态
 
   //sdcard_listdir(sdcard_mount_point, 0);
 
@@ -342,4 +354,6 @@ void setup() {
 
 
 void loop() {
+  bmp280_read(fileBMP);
+  vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
 }
