@@ -10,30 +10,17 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "FS.h"
+#include "SD.h"
 
-
-#ifdef __cplusplus
- extern "C" {
-#endif
-
-extern const char *sdcard_mount_point;
-
-esp_err_t sdcard_init();
-esp_err_t sdcard_format();
-uint64_t sdcard_get_free_bytes();
-
-uint32_t sdcard_get_record_id();
+void sdcard_print_info(fs::SDFS &fs);
+void sdcard_create_record_dir(fs::FS &fs);
 const char* sdcard_get_record_dir();
-void sdcard_listdir(const char *name, int indent);
-esp_err_t sdcard_print_content(char *fpath);
+void sdcard_listdir(fs::FS &fs, const char *dirname, uint8_t levels=0);
+esp_err_t sdcard_print_content(fs::FS &fs, char *fpath);
 
 esp_err_t sdcard_log_start();
 esp_err_t sdcard_log_stop();
 int sdcard_log(const char *format, ...);
-
-#ifdef __cplusplus
-}
-#endif
-
 
 #endif /* MAIN_SDCARD_H_ */

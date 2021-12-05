@@ -40,8 +40,8 @@ static esp_timer_handle_t sdp_timer;
 static TaskHandle_t read_sensor_task_handle;
 static TaskHandle_t write_task_handle;
 
-static FILE *fileSDP = NULL;   // SDP sensor: diff pressure
-static FILE *fileBMP = NULL;
+static File fileSDP;   // SDP sensor: diff pressure
+static File fileBMP;
 
 static QueueHandle_t xQueueSDP;
 static QueueHandle_t xQueueSDPErrors;
@@ -57,9 +57,10 @@ static void sdptask_write();
 static void sdptask_led_off();
 static void sdp_timer_callback(void* arg);
 static void xqueue_check_errors();
-static FILE* open_fileSDP();
-esp_err_t write_sdpinfo();
-static void bmp280_read(FILE *fileBMP);
+static File open_fileSDP();
+static File open_fileBMP();
+esp_err_t write_sdpinfo(fs::FS &fs);
+static void bmp280_read(File fileBMP);
 static void bmp280_task(void *not_used);
 
 SDPSensor sdp(0x25, 0);
@@ -94,10 +95,10 @@ static void sdptask_read_sensor(void *not_used) {
 }
 
 
-static FILE* open_fileSDP() {
+static File open_fileSDP() {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/SDP.bin", sdcard_get_record_dir());
-  FILE *file = fopen(fpath, "w");
+  File file = SD.open(fpath, FILE_WRITE);
   if (file != NULL) {
     ESP_LOGI(TAG, "Opened file for writing diff pressure: '%s'", fpath);
   }
@@ -158,13 +159,12 @@ static void sdptask_write(void *not_used) {
           if (dt > dt_max) dt_max = dt;
         }
       }
-      written_cnt = fwrite(sdp_records, sizeof(SDPRecord), RECORDS_BUFFER_SIZE, fileSDP);
-      if (written_cnt != RECORDS_BUFFER_SIZE) {
+      written_cnt = fileSDP.write((const uint8_t*) sdp_records, sizeof(SDPRecord) * RECORDS_BUFFER_SIZE);
+      if (written_cnt != sizeof(SDPRecord) * RECORDS_BUFFER_SIZE) {
         ESP_LOGE(TAG, "fwrite(recordsDP) failed");
       }
     } while (uxQueueMessagesWaiting(xQueueSDP) >= RECORDS_BUFFER_SIZE);
-    fflush(fileSDP);
-    fsync(fileno(fileSDP));
+    fileSDP.flush();
 
     if (messages_cnt > messages_cnt_max) messages_cnt_max = messages_cnt;
 
@@ -185,7 +185,7 @@ void record_sdp_start() {
   while (sdp.begin() != ESP_OK);
   while (sdp.startContinuous() != ESP_OK);
 
-  write_sdpinfo();
+  write_sdpinfo(SD);
   
   const esp_timer_create_args_t sdp_timer_args = {
             .callback = &sdp_timer_callback,
@@ -223,10 +223,10 @@ void record_sdp_stop() {
 }
 
 
-static FILE* open_fileBMP() {
+static File open_fileBMP() {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/BMP.bin", sdcard_get_record_dir());
-  FILE *file = fopen(fpath, "w");
+  File file = SD.open(fpath, FILE_WRITE);
   if (file != NULL) {
     ESP_LOGI(TAG, "Opened file for writing atm. pressure: '%s'", fpath);
   }
@@ -241,7 +241,7 @@ static void bmp280_task(void *not_used)
 {
   BMPRecord bmp_record;
 
-//  FILE *fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
+//  File fileBMP = open_fileBMP();  // atm. pressure, temp., humidity
   ESP_LOGI(TAG, "BMP task started");
 
   while (1) {
@@ -265,7 +265,7 @@ esp_err_t record_bmp_start() {
 }
 
 
-static void bmp280_read(FILE *fileBMP) {
+static void bmp280_read(File fileBMP) {
   if (!bmp_initialized) return;
   
   BMPRecord bmp_record;
@@ -279,15 +279,10 @@ static void bmp280_read(FILE *fileBMP) {
   M5.lcd.fillRect(0,50,100,60,BLACK);
   M5.Lcd.printf("Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%2.0fPa\r\n",
                  bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
-  M5.update();
-
-  ESP_LOGI(TAG, "Temp: %2.1f  \r\nHumi: %2.0f%%  \r\nPressure:%.0fPa\r\n",
-                 bmp_record.temperature, bmp_record.humidity, bmp_record.pressure);
 
   bmp_record.time = esp_timer_get_time();
-  fwrite(&bmp_record, sizeof(BMPRecord), 1, fileBMP);
-  fflush(fileBMP);
-  fsync(fileno(fileBMP));
+  fileBMP.write((const uint8_t*) &bmp_record, sizeof(BMPRecord));
+  fileBMP.flush();
 }
 
 
@@ -303,24 +298,24 @@ void record_bmp_stop() {
  * Must be called after both the SD card
  * and the sensor are initialized.
  */
-esp_err_t write_sdpinfo() {
+esp_err_t write_sdpinfo(fs::FS &fs) {
   char fpath[128];
   snprintf(fpath, sizeof(fpath), "%s/SENSOR.txt", sdcard_get_record_dir());
-  FILE *file = fopen(fpath, "w");
+  File file = fs.open(fpath, FILE_WRITE);
   if (file == NULL) {
-    return ESP_ERR_NO_MEM;
+    return ESP_ERR_NOT_FOUND;
   }
 
   uint32_t model_number, range_pa, product_id;
   uint64_t serial;
   sdp.getInfo(&model_number, &range_pa, &product_id, &serial);
   uint16_t pressure_scale = sdp.getPressureScale();
-  fprintf(file, "Model number: %u\n", model_number);
-  fprintf(file, "Range Pa: %u\n", range_pa);
-  fprintf(file, "Pressure scale: %u\n", pressure_scale);
-  fprintf(file, "Product ID: 0x%08X\n", product_id);
-  fprintf(file, "Serial: 0x%016llX\n", serial);
-  fclose(file);
+  file.printf("Model number: %u\n", model_number);
+  file.printf("Range Pa: %u\n", range_pa);
+  file.printf("Pressure scale: %u\n", pressure_scale);
+  file.printf("Product ID: 0x%08X\n", product_id);
+  file.printf("Serial: 0x%016llX\n", serial);
+  file.close();
 
   ESP_LOGI(TAG, "Wrote sensor info to '%s'", fpath);
   return ESP_OK;
@@ -330,23 +325,17 @@ esp_err_t write_sdpinfo() {
 
 void setup() {
   bool LCDEnable = true;
-  bool SDEnable = false;
+  bool SDEnable = true;
   bool SerialEnable = true;
   bool I2CEnablePortA = false;  // BMP280 sensor
   M5.begin(LCDEnable, SDEnable, SerialEnable, I2CEnablePortA);
   M5.lcd.setTextSize(2);
   M5.Lcd.fillScreen(GREEN);
-  
-  if (sdcard_init() != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to init the SD card");
-    return;
-  }
 
-
-  M5.lcd.println(F("ENV Unit(SHT30 and BMP280) test...\n"));
-  M5.update();  //Read the press state of the key.  读取按键 A, B, C 的状态
-
-  //sdcard_listdir(sdcard_mount_point, 0);
+  sdcard_print_info(SD);
+  sdcard_create_record_dir(SD);
+//  sdcard_listdir(SD, "/RECORDS/063");
+//  sdcard_print_content(SD, "/RECORDS/063/SENSOR.txt");
 
   record_sdp_start();
   record_bmp_start();
@@ -355,5 +344,6 @@ void setup() {
 
 void loop() {
   bmp280_read(fileBMP);
+  M5.update();
   vTaskDelay(pdMS_TO_TICKS(BMP280_SAMPLE_PERIOD_MS));
 }
