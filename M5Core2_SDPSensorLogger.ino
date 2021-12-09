@@ -74,8 +74,8 @@ static const char *LOG_LEVEL_CHR = "NEWIDV";
 
 
 SDPSensor sdp(0x25, 0);
-SHT3x sht30(0x44, &Wire1);
-Adafruit_BMP280 bmp(&Wire1);
+SHT3x sht30(0x44, &Wire);
+Adafruit_BMP280 bmp(&Wire);
 
 
 static void log_app(esp_log_level_t level, const char *format, ...) {
@@ -141,7 +141,7 @@ static void sdptask_read_sensor(void *not_used) {
 
 static File open_fileSDP() {
   char fpath[128];
-  snprintf(fpath, sizeof(fpath), "%s/SDP.bin", sdcard_get_record_dir());
+  snprintf(fpath, sizeof(fpath), "%s/SDP.BIN", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
   if (file) {
     log_app_i("Opened file for writing diff pressure: '%s'", fpath);
@@ -176,11 +176,6 @@ static void sdptask_write(void *not_used) {
 
   OnlineMean_Init(&dt_mean);
 
-  SDPRecord rec_dummy = {
-      .time = 0,
-      .diff_pressure_raw = 0
-  };
-
   while (1) {
     messages_cnt = uxQueueMessagesWaiting(xQueueSDP);
     OnlineMean_Reset(&dt_mean);
@@ -203,7 +198,12 @@ static void sdptask_write(void *not_used) {
           if (dt > dt_max) dt_max = dt;
         }
       }
-      fileSDP.write((const uint8_t*) sdp_records, sizeof(SDPRecord) * RECORDS_BUFFER_SIZE);
+      written_cnt = fileSDP.write((const uint8_t*) sdp_records, sizeof(SDPRecord) * RECORDS_BUFFER_SIZE);
+      if (written_cnt != sizeof(SDPRecord) * RECORDS_BUFFER_SIZE) {
+        log_app_e("SDP IO file error. Restarting...");
+        fileSDP.close();
+        esp_restart();
+      }
     } while (uxQueueMessagesWaiting(xQueueSDP) >= RECORDS_BUFFER_SIZE);
     fileSDP.flush();
 
@@ -222,6 +222,8 @@ static void sdptask_write(void *not_used) {
 
 void record_sdp_start() {
   sdp.initI2C(14, 13);  // PortC;
+  Wire.begin(14, 13);
+  Wire.setClock(400000);
   while (sdp.stopContinuous() != ESP_OK);
   while (sdp.begin() != ESP_OK);
   while (sdp.startContinuous() != ESP_OK);
@@ -266,7 +268,7 @@ void record_sdp_stop() {
 
 static File open_fileBMP() {
   char fpath[128];
-  snprintf(fpath, sizeof(fpath), "%s/BMP.bin", sdcard_get_record_dir());
+  snprintf(fpath, sizeof(fpath), "%s/BMP.BIN", sdcard_get_record_dir());
   File file = SD.open(fpath, FILE_WRITE);
   if (file) {
     log_app_i("Opened file for writing atm. pressure: '%s'", fpath);
@@ -293,7 +295,7 @@ static void bmp280_task(void *not_used)
 
 
 esp_err_t record_bmp_start() {
-  Wire1.begin(32, 33);
+//  Wire1.begin(32, 33);
   if (!bmp.begin(0x76)) {
     log_app_e("Failed to init a BMP280 sensor");
     return ESP_FAIL;
@@ -385,7 +387,7 @@ void setup() {
 //  sdcard_print_content(SD, "/RECORDS/063/SENSOR.txt");
 
   record_sdp_start();
-  record_bmp_start();
+//  record_bmp_start();
 }
 
 

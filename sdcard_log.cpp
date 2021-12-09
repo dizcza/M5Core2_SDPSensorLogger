@@ -36,7 +36,7 @@ esp_err_t sdcard_log_start(fs::FS &fs) {
     if (sync_sdcard_log == NULL) {
     	sync_sdcard_log = xSemaphoreCreateBinary();
     }
-    snprintf(log_path, sizeof(log_path), "%s/log.log", sdcard_get_record_dir());
+    snprintf(log_path, sizeof(log_path), "%s/LOG.LOG", sdcard_get_record_dir());
 	log_file = fs.open(log_path, FILE_WRITE);
 	if (log_file) {
 		ESP_LOGI(TAG, "logging to '%s'", log_path);
