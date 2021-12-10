@@ -5,9 +5,6 @@
  *      Author: Danylo Ulianych
  */
 
-#ifdef __cplusplus
- extern "C" {
-#endif
 
 #include <dirent.h>
 #include <stdio.h>
@@ -18,14 +15,8 @@
 
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_vfs_fat.h"
-#include "sdmmc_cmd.h"
-#include "driver/uart.h"
-#include "driver/i2c.h"
-#include "driver/sdmmc_host.h"
-#include "driver/sdmmc_types.h"
-#include "vfs_fat_internal.h"
 
+#include "bsp_log.h"
 #include "sdcard.h"
 #include "record.h"
 
@@ -137,7 +128,7 @@ static void sdcard_remove_record_files(int record_id) {
 	}
 	closedir(directory);
 
-	ESP_LOGI(TAG, "Removed files in record %d", record_id);
+	BSP_LOGI(TAG, "Removed files in record %d", record_id);
 }
 
 
@@ -166,7 +157,7 @@ static esp_err_t sdcard_get_sdpfile_path(char *path, int record_id) {
 	if (sdp_cnt == 0) {
 		return ESP_ERR_NOT_FOUND;
 	}
-	sprintf(path, "%s/%s-%03d.bin", dirpath, sdp_pref, sdp_cnt - 1);
+	sprintf(path, "%s/%s%03d.bin", dirpath, sdp_pref, sdp_cnt - 1);
 	closedir(directory);
 
 	return ESP_OK;
@@ -178,24 +169,11 @@ int sdcard_get_record_id() {
 }
 
 
-uint64_t sdcard_get_free_bytes() {
-    FATFS *fs;
-    size_t free_clusters;
-    uint64_t free_bytes = 0;
-    /* Get volume information and free clusters of drive 0 */
-    if (f_getfree("0:", &free_clusters, &fs) == FR_OK) {
-    	uint64_t free_sectors = ((uint64_t) free_clusters) * fs->csize;
-    	free_bytes = free_sectors * fs->ssize;
-    }
-    return free_bytes;
-}
-
-
 void sdcard_create_record_dir() {
     char rec_folder[128];
 	struct stat dstat = { 0 };
     snprintf(rec_folder, sizeof(rec_folder), "%s/RECORDS", sdcard_mount_point);
-	if (stat(rec_folder, &dstat) == -1) {
+    if (stat(rec_folder, &dstat) == -1) {
 		mkdir(rec_folder, 0700);
 	}
     m_record_id = sdcard_count_dirs(rec_folder);
@@ -236,7 +214,7 @@ const char* sdcard_get_record_dir() {
 esp_err_t sdcard_print_content(char *fpath) {
 	FILE *f = fopen(fpath, "r");
 	if (f == NULL) {
-		ESP_LOGW(TAG, "No such file: '%s'", fpath);
+		BSP_LOGW(TAG, "No such file: '%s'", fpath);
 		return ESP_ERR_NOT_FOUND;
 	}
 	printf("\n>>> BEGIN '%s'\n", fpath);
@@ -263,7 +241,7 @@ int64_t sdcard_get_record_duration(int record_id) {
     fseek(f, 0L, SEEK_END);
     long int fsize = ftell(f);
     if (fsize % sizeof(SDPRecord) != 0) {
-    	ESP_LOGW(TAG, "%s file is corrupted", fpath);
+    	BSP_LOGW(TAG, "%s file is corrupted", fpath);
     }
     long int records_cnt = fsize / sizeof(SDPRecord);
     fseek(f, (records_cnt - 1) * sizeof(SDPRecord), SEEK_SET);
@@ -271,7 +249,7 @@ int64_t sdcard_get_record_duration(int record_id) {
     fread(&record, sizeof(SDPRecord), 1, f);
     fclose(f);
     time_t seconds = (time_t) (record.time / 1000000);
-    ESP_LOGI(TAG, "Record %d ended %s", record_id, ctime(&seconds));
+    BSP_LOGI(TAG, "Record %d ended %s", record_id, ctime(&seconds));
     return record.time;
 }
 
@@ -285,7 +263,3 @@ esp_err_t sdcard_print_content_prev(char *fname) {
     return sdcard_print_content(fpath);
 }
 
-
-#ifdef __cplusplus
-}
-#endif

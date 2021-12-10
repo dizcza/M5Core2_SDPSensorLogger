@@ -11,10 +11,8 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-
-#ifdef __cplusplus
- extern "C" {
-#endif
+#define SDPSENSOR_SAMPLE_PERIOUD_US   1000
+#define BMP280_SAMPLE_PERIOD_MS       10000
 
 
 // SDPxx sensor: diff pressure
@@ -38,11 +36,7 @@ void record_sdp_stop();
 
 esp_err_t record_bmp_start();
 void record_bmp_stop();
-
-
-#ifdef __cplusplus
-}
-#endif
+void record_bmp_read();
 
 
 #endif /* MAIN_RECORD_H_ */

@@ -6,11 +6,14 @@
  */
 
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #include "sdcard.h"
+#include "board.h"
 
 static xSemaphoreHandle sync_sdcard_log = NULL;
 static FILE *log_file;
@@ -20,6 +23,7 @@ static const char *TAG = "sdcard";
 
 
 size_t sdcard_log(char *msg) {
+    if (sync_sdcard_log == NULL) return 0;
 	xSemaphoreTake(sync_sdcard_log, portMAX_DELAY);
 	// A thread can enter this block after another thread
 	// closes the file with sdcard_log_stop().
