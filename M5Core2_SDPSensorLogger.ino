@@ -36,6 +36,7 @@ void setup() {
   board_init();
   sdcard_init(SD);
 //  sdcard_listdir(sdcard_mount_point, 0);
+//  sdcard_print_content_prev("LOG.LOG");
 
   record_sdp_start();
 //  record_bmp_start();

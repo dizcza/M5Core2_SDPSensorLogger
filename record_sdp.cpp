@@ -80,7 +80,7 @@ static void IRAM_ATTR sdpsensor_irq_handler() {
  */
 static esp_err_t write_sdpinfo() {
     char fpath[128];
-    snprintf(fpath, sizeof(fpath), "%s/SENSOR.txt", sdcard_get_record_dir());
+    snprintf(fpath, sizeof(fpath), "%s/SENSOR.TXT", sdcard_get_record_dir());
     FILE *file = fopen(fpath, "w");
     if (file == NULL) {
         return ESP_ERR_NOT_FOUND;
@@ -89,7 +89,7 @@ static esp_err_t write_sdpinfo() {
     uint32_t model_number, range_pa, product_id;
     uint64_t serial;
     sdp.getInfo(&model_number, &range_pa, &product_id, &serial);
-    BSP_LOGI(TAG, "Initialized SDP%d %dPa sensor", model_number, range_pa);
+//    BSP_LOGI(TAG, "Initialized SDP%d %dPa sensor", model_number, range_pa);
     uint16_t pressure_scale = sdp.getPressureScale();
     fprintf(file, "Model number: %u\n", model_number);
     fprintf(file, "Range Pa: %u\n", range_pa);
@@ -138,16 +138,12 @@ static void sdptask_read_sensor() {
 static FILE* open_fileSDP() {
     static int trial = 0;
     char fpath[128];
-    snprintf(fpath, sizeof(fpath), "%s/SDP-%03d.bin", sdcard_get_record_dir(), trial++);
+    snprintf(fpath, sizeof(fpath), "%s/SDP-%03d.BIN", sdcard_get_record_dir(), trial++);
     FILE *file = fopen(fpath, "w");
     while (file == NULL) {
         ESP_LOGE("fopen(fileSDP) failed");
         vTaskDelay(pdMS_TO_TICKS(1));
         file = fopen(fpath, "w");
-    }
-    if (file == NULL) {
-        BSP_LOGE(TAG, "Could not open fileSDP");
-        esp_restart();
     }
     BSP_LOGI(TAG, "Opened %s", fpath);
     return file;

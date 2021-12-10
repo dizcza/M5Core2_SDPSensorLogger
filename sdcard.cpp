@@ -157,7 +157,7 @@ static esp_err_t sdcard_get_sdpfile_path(char *path, int record_id) {
 	if (sdp_cnt == 0) {
 		return ESP_ERR_NOT_FOUND;
 	}
-	sprintf(path, "%s/%s%03d.bin", dirpath, sdp_pref, sdp_cnt - 1);
+	sprintf(path, "%s/%s%03d.BIN", dirpath, sdp_pref, sdp_cnt - 1);
 	closedir(directory);
 
 	return ESP_OK;
