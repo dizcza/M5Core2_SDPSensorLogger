@@ -65,6 +65,8 @@ esp_err_t write_sdpinfo(fs::FS &fs);
 static void bmp280_read(File fileBMP);
 static void bmp280_task(void *not_used);
 
+extern void sdcard_init(fs::SDFS &fs);
+
 static void log_app(esp_log_level_t level, const char *format, ...);
 static const char *LOG_LEVEL_CHR = "NEWIDV";
 
@@ -383,8 +385,7 @@ void setup() {
   M5.Lcd.print("\n");  // reserve space for BMP logging
 
   sdcard_init(SD);
-//  sdcard_listdir(SD, "/RECORDS/063");
-//  sdcard_print_content(SD, "/RECORDS/063/SENSOR.txt");
+  sdcard_listdir(sdcard_mount_point, 0);
 
   record_sdp_start();
 //  record_bmp_start();
@@ -392,7 +393,7 @@ void setup() {
 
 
 void loop() {
-  bmp280_read(fileBMP);
+//  bmp280_read(fileBMP);
   if (M5.Lcd.getCursorY() >= 240) {
     M5.Lcd.clear();
     M5.Lcd.setCursor(0, 3 * 8);  // skip the BMP logging

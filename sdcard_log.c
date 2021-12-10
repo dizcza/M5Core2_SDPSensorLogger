@@ -5,6 +5,7 @@
  *      Author: Danylo Ulianych
  */
 
+#include <string.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -12,7 +13,7 @@
 #include "sdcard.h"
 
 static xSemaphoreHandle sync_sdcard_log = NULL;
-static File log_file;
+static FILE *log_file;
 static int8_t log_active = 0;
 
 static const char *TAG = "sdcard";
@@ -24,28 +25,29 @@ size_t sdcard_log(char *msg) {
 	// closes the file with sdcard_log_stop().
     size_t sz = 0;
 	if (log_active && log_file) {
-	    sz = log_file.println(msg);
+        fwrite(msg, strlen(msg), sizeof(char), log_file);
+		fflush(log_file);
+		fsync(fileno(log_file));
 	}
     xSemaphoreGive(sync_sdcard_log);
     return sz;
 }
 
 
-esp_err_t sdcard_log_start(fs::FS &fs) {
+esp_err_t sdcard_log_start() {
     char log_path[128];
     if (sync_sdcard_log == NULL) {
     	sync_sdcard_log = xSemaphoreCreateBinary();
     }
     snprintf(log_path, sizeof(log_path), "%s/LOG.LOG", sdcard_get_record_dir());
-	log_file = fs.open(log_path, FILE_WRITE);
-	if (log_file) {
-		ESP_LOGI(TAG, "logging to '%s'", log_path);
-		log_active = 1;
-		xSemaphoreGive(sync_sdcard_log);
-		return ESP_OK;
-	} else {
+    log_file = fopen(log_path, "w");
+	if (log_file == NULL) {
 		ESP_LOGE(TAG, "Could not open file for logging: %s", log_path);
+		return ESP_FAIL;
 	}
+	ESP_LOGI(TAG, "logging to '%s'", log_path);
+	log_active = 1;
+	xSemaphoreGive(sync_sdcard_log);
 	return ESP_FAIL;
 }
 
@@ -59,8 +61,8 @@ esp_err_t sdcard_log_stop() {
 	int ret = 0;
 	if (log_active) {
 		if (log_file) {
-            log_file.close();
-			log_file = (File) NULL;
+            ret = fclose(log_file);
+			log_file = NULL;
 			ESP_LOGI(TAG, "Closed the SD card log file.");
 		}
 	}
