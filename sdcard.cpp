@@ -15,6 +15,7 @@
 
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp32-hal-log.h"
 
 #include "bsp_log.h"
 #include "sdcard.h"
@@ -211,7 +212,7 @@ const char* sdcard_get_record_dir() {
 }
 
 
-esp_err_t sdcard_print_content(char *fpath) {
+esp_err_t sdcard_print_content(const char *fpath) {
 	FILE *f = fopen(fpath, "r");
 	if (f == NULL) {
 		BSP_LOGW(TAG, "No such file: '%s'", fpath);

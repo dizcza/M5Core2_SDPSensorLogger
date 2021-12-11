@@ -23,7 +23,7 @@ int sdcard_get_record_id();
 const char* sdcard_get_record_dir();
 void sdcard_create_record_dir();
 void sdcard_listdir(const char *name, int indent);
-esp_err_t sdcard_print_content(char *fpath);
+esp_err_t sdcard_print_content(const char *fpath);
 esp_err_t sdcard_print_content_prev(char *fname);
 int64_t sdcard_get_record_duration(int record_id);
 uint64_t sdcard_get_free_bytes();

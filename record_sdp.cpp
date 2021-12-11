@@ -5,6 +5,8 @@
  *      Author: Danylo Ulianych
  */
 
+#include <M5Core2.h>
+
 #include <math.h>
 #include <unistd.h>
 #include <string.h>
@@ -23,6 +25,7 @@
 
 #define READ_SENSORS_PRIORITY    3
 #define WRITE_TO_SDCARD_PRIORITY 2
+#define WATCHDOG_UPDATE_MS       1000L
 
 #define ESP32_SDPSENSOR_DEBUG         0
 
@@ -140,9 +143,16 @@ static FILE* open_fileSDP() {
     char fpath[128];
     snprintf(fpath, sizeof(fpath), "%s/SDP-%03d.BIN", sdcard_get_record_dir(), trial++);
     FILE *file = fopen(fpath, "w");
+    int64_t t_last = esp_timer_get_time();
     while (file == NULL) {
-        ESP_LOGE("fopen(fileSDP) failed");
-        vTaskDelay(pdMS_TO_TICKS(1));
+        int64_t t_curr = esp_timer_get_time();
+        if (t_curr - t_last > 100000) {
+          SD.end();
+          while (!SD.begin(TFCARD_CS_PIN, SPI, 40000000)) delay(10);
+          BSP_LOGW(TAG, "SD restarted");
+          t_last = t_curr;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
         file = fopen(fpath, "w");
     }
     BSP_LOGI(TAG, "Opened %s", fpath);
@@ -170,19 +180,26 @@ static void sdptask_write() {
     uint32_t rid;     // diff pressure record id
     UBaseType_t messages_cnt_max = 0;
     OnlineMean dt_mean;
-    int64_t dt, dt_min = INT64_MAX, dt_max = 0;
-    int16_t dp_max = 0, dp_min = 0;
+    int64_t wd_update, dt, dt_min = INT64_MAX, dt_max = 0;
+    int16_t dp_max = 0;
     size_t wcnt;
 
     OnlineMean_Init(&dt_mean);
 
     const Board_t *board = board_get();
     FILE *fileSDP = open_fileSDP();
+	const TickType_t sleep_ticks = pdMS_TO_TICKS(10);
 
     while (1) {
         int8_t print_update = 0;
         OnlineMean_Reset(&dt_mean);
+   		wd_update = esp_timer_get_time();
         do {  /* fwrite until the queue length is not enough */
+            if (esp_timer_get_time() - wd_update > WATCHDOG_UPDATE_MS * 1000L) {
+				vTaskDelay(sleep_ticks);
+				wd_update = esp_timer_get_time();
+			}
+
             if (messages_cnt_max < uxQueueMessagesWaiting(xQueueSDP)) {
                 messages_cnt_max = uxQueueMessagesWaiting(xQueueSDP);
                 print_update = 1;
@@ -196,9 +213,6 @@ static void sdptask_write() {
 
                 if (sdp_records[rid].diff_pressure_raw > dp_max) {
                     dp_max = sdp_records[rid].diff_pressure_raw;
-                }
-                if (sdp_records[rid].diff_pressure_raw < dp_min) {
-                    dp_min = sdp_records[rid].diff_pressure_raw;
                 }
                 if (rid > 0) {
                     dt = sdp_records[rid].time - sdp_records[rid-1].time;
@@ -215,7 +229,7 @@ static void sdptask_write() {
             }
             wcnt = fwrite(sdp_records, sizeof(SDPRecord), RECORDS_BUFFER_SIZE, fileSDP);
             while (wcnt != RECORDS_BUFFER_SIZE) {
-                BSP_LOGE(TAG, "fwrite(fileSDP) failed. Reopening...");
+                BSP_LOGE(TAG, "fwrite(fileSDP) failed. Retrying...");
                 board->led_set_error();
                 fclose(fileSDP);
                 fileSDP = open_fileSDP();
@@ -226,13 +240,15 @@ static void sdptask_write() {
         fsync(fileno(fileSDP));
 
         if (print_update || ESP32_SDPSENSOR_DEBUG) {
-            BSP_LOGI(TAG, "[q %u] read=%.0f (min=%lld, max=%lld); dp (%d, %d)",
+            BSP_LOGI(TAG, "[q %u] [r %.0f %lld %lld] [dp %d]",
                     messages_cnt_max,
                     OnlineMean_GetMean(&dt_mean), dt_min, dt_max,
-                    dp_min, dp_max);
+                    dp_max);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // TODO M5.Lcd print header info queue
+
+        vTaskDelay(sleep_ticks);
     }
 }
 
@@ -257,11 +273,11 @@ void record_sdp_start() {
     };
     ESP_ERROR_CHECK(esp_timer_create(&sdp_timer_args, &sdp_timer));
 
-    xQueueSDP = xQueueCreate( 100 * RECORDS_BUFFER_SIZE, sizeof(SDPRecord) );
+    xQueueSDP = xQueueCreate( 5000 * RECORDS_BUFFER_SIZE, sizeof(SDPRecord) );
     xQueueSDPErrors = xQueueCreate( 100, sizeof(esp_err_t) );
 
     xTaskCreatePinnedToCore((TaskFunction_t) sdptask_read_sensor, "sdp_read", 2048, NULL, READ_SENSORS_PRIORITY, &read_sensor_task_handle, APP_CPU_NUM);
-    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_write, "sdp_write", 4096, NULL, WRITE_TO_SDCARD_PRIORITY, &write_task_handle, PRO_CPU_NUM);
+    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_write, "sdp_write", 8192, NULL, WRITE_TO_SDCARD_PRIORITY, &write_task_handle, PRO_CPU_NUM);
 
     // let SDP & BMP tasks start
     vTaskDelay(pdMS_TO_TICKS(1000));

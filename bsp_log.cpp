@@ -27,7 +27,7 @@ void bsp_log(esp_log_level_t level, const char *format, ...) {
   va_list args;
   va_start( args, format );
   size_t offset = snprintf(log_buffer, sizeof(log_buffer), "%c (%lld) ",
-                           LOG_LEVEL_CHR[level], esp_timer_get_time());
+                           LOG_LEVEL_CHR[level], esp_timer_get_time() / 1000);
   offset += vsnprintf(log_buffer + offset, sizeof(log_buffer) - offset, format, args);
   uint16_t color = LIGHTGREY;
   switch (level) {

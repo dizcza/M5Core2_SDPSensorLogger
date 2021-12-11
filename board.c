@@ -17,6 +17,7 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 #include "led_strip.h"
+#include "esp32-hal-log.h"
 
 #include "board.h"
 
