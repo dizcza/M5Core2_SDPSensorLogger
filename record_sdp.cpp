@@ -18,7 +18,7 @@
 
 #include "bsp_log.h"
 #include "onlinemean.h"
-#include "sdpsensor.h"
+#include "SDPSensors.h"
 #include "sdcard.h"
 #include "record.h"
 #include "board.h"
@@ -48,7 +48,7 @@ static uint64_t records_received = 0;
 
 static const char *TAG = "sdptask";
 
-SDPSensor sdp(0x25, 0);
+SDPSensor sdp(0x25);
 
 static void sdptask_read_sensor();
 static void sdptask_write();
@@ -60,18 +60,6 @@ static FILE* open_fileSDP();
 static void sdp_timer_callback(void* arg)
 {
     xTaskNotifyGive(read_sensor_task_handle);
-}
-
-
-static void IRAM_ATTR sdpsensor_irq_handler() {
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(read_sensor_task_handle, &xHigherPriorityTaskWoken);
-
-    /* If xHigherPriorityTaskWoken is now set to pdTRUE then a context switch
-       should be performed to ensure the interrupt returns directly to the highest
-       priority task.  The macro used for this purpose is dependent on the port in
-       use and may be called portEND_SWITCHING_ISR(). */
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 
@@ -89,10 +77,49 @@ static esp_err_t write_sdpinfo() {
         return ESP_ERR_NOT_FOUND;
     }
 
-    uint32_t model_number, range_pa, product_id;
+    uint32_t model_number, range_pa;
+    switch(sdp.getModel()) {
+    case SDP31_500:
+      model_number = 31;
+      range_pa = 500;
+      break;
+    case SDP32_125:
+      model_number = 32;
+      range_pa = 125;
+      break;
+    case SDP800_500:
+      model_number = 800;
+      range_pa = 500;
+      break;
+    case SDP810_500:
+      model_number = 810;
+      range_pa = 500;
+      break;
+    case SDP801_500:
+      model_number = 801;
+      range_pa = 500;
+      break;
+    case SDP811_500:
+      model_number = 811;
+      range_pa = 500;
+      break;
+    case SDP800_125:
+      model_number = 800;
+      range_pa = 125;
+      break;
+    case SDP810_125:
+      model_number = 810;
+      range_pa = 125;
+      break;
+    default:
+      model_number = 0;
+      range_pa = 0;
+      break;
+    }
+    uint32_t product_id;
     uint64_t serial;
-    sdp.getInfo(&model_number, &range_pa, &product_id, &serial);
-//    BSP_LOGI(TAG, "Initialized SDP%d %dPa sensor", model_number, range_pa);
+    sdp.readProductID(&product_id, &serial);
+    BSP_LOGI(TAG, "Initialized SDP%d %dPa sensor", model_number, range_pa);
     uint16_t pressure_scale = sdp.getPressureScale();
     fprintf(file, "Model number: %u\n", model_number);
     fprintf(file, "Range Pa: %u\n", range_pa);
@@ -108,25 +135,25 @@ static esp_err_t write_sdpinfo() {
 
 
 static void sdptask_read_sensor() {
-    esp_err_t err;
+    bool success;
     SDPRecord sdp_record;  // diff pressure
     const Board_t *board = board_get();
     const int8_t is_bmp_same_wire = board->bmp_gpio.sda == board->sdp_gpio.sda
         || board->bmp_gpio.scl == board->sdp_gpio.scl;
     int64_t bmp_last_update = -BMP280_SAMPLE_PERIOD_MS;
+    const esp_err_t err_fail = ESP_FAIL;
 
     while (1) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         sdp_record.time = esp_timer_get_time();
-        err = sdp.readDiffPressure(&sdp_record.diff_pressure_raw);
+        success = sdp.readMeasurement(&sdp_record.diff_pressure_raw, NULL, NULL);
+        log_i("sdp took %lld us", esp_timer_get_time() - sdp_record.time);
 
-        if (err == ESP_OK) {
+        if (success) {
             xQueueSend(xQueueSDP, &sdp_record, portMAX_DELAY);
-        } else if (err == ESP_ERR_INVALID_CRC) {
-            // ignore silently
         } else {
-            xQueueSend(xQueueSDPErrors, &err, 0);
+            xQueueSend(xQueueSDPErrors, &err_fail, 0);
             // Set the LED error flag ON
             board->led_set_error();
         }
@@ -255,16 +282,15 @@ static void sdptask_write() {
 
 void record_sdp_start() {
     const Board_t *board = board_get();
-    sdp.initI2C(board->sdp_gpio.sda, board->sdp_gpio.scl);
-    while (sdp.stopContinuous() != ESP_OK);
-    while (sdp.begin() != ESP_OK);
-    while (sdp.startContinuous() != ESP_OK);
+    while (!sdp.stopContinuous());
+    while (sdp.begin() == 0);
+    while (!sdp.startContinuous(false));
 
     write_sdpinfo();
 
-    float temperature;
-    if (sdp.readDiffPressureTemperature(NULL, &temperature) == ESP_OK) {
-        BSP_LOGI(TAG, "SDP sensor t° %.1f", temperature);
+    int16_t temperature;
+    if (sdp.readMeasurement(NULL, &temperature, NULL)) {
+        BSP_LOGI(TAG, "SDP sensor t° %.1f", temperature / 200.0f);
     }
 
     const esp_timer_create_args_t sdp_timer_args = {
@@ -282,13 +308,8 @@ void record_sdp_start() {
     // let SDP & BMP tasks start
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    if (board->sdp_gpio.irq != 0) {
-        sdp.attachIRQHandler(board->sdp_gpio.irq, sdpsensor_irq_handler);
-        xTaskNotifyGive(read_sensor_task_handle);
-    } else {
-        ESP_ERROR_CHECK(esp_timer_start_periodic(sdp_timer, SDPSENSOR_SAMPLE_PERIOUD_US));
-        BSP_LOGI(TAG, "Started a periodic timer");
-    }
+    ESP_ERROR_CHECK(esp_timer_start_periodic(sdp_timer, SDPSENSOR_SAMPLE_PERIOUD_US));
+    BSP_LOGI(TAG, "Started a periodic timer");
 
     BSP_LOGI(TAG, "SDP tasks started");
 }
