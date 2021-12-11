@@ -1,12 +1,8 @@
 #include <M5Core2.h>
 
-#include "Adafruit_Sensor.h"
-#include <Adafruit_BMP280.h>
-
 #include "bsp_log.h"
 #include "sdcard.h"
 #include "record.h"
-#include "SHT3x.h"
 #include "board.h"
 
 static const char *TAG = "main";
@@ -35,6 +31,7 @@ void setup() {
 
 //  record_bmp_start();
   record_sdp_start();
+
 }
 
 

@@ -26,6 +26,7 @@
 #define READ_SENSORS_PRIORITY    3
 #define WRITE_TO_SDCARD_PRIORITY 2
 #define WATCHDOG_UPDATE_MS       1000L
+#define SDP_WATCHDOG_MAX_FAILS   3
 
 #define ESP32_SDPSENSOR_DEBUG         0
 
@@ -60,6 +61,42 @@ static FILE* open_fileSDP();
 static void sdp_timer_callback(void* arg)
 {
     xTaskNotifyGive(read_sensor_task_handle);
+}
+
+
+/**
+ * Check the error code status of the last read measurement.
+ * If enough errors occurred, a software reset is issued.
+ *
+ * Usage:
+ *   esp_err_t err = sdp.readContinuousRaw(&diff_pressure);
+ *   sdp.watchdogCheck(err);
+ *
+ * @param status - the error code of the last measurement
+ */
+bool sdp_watchdog_check(bool success) {
+    static int failsCount = 0;
+
+    if (success) {
+        failsCount = 0;
+    } else {
+        failsCount++;
+    }
+
+    if (failsCount >= SDP_WATCHDOG_MAX_FAILS) {
+        BSP_LOGW(TAG, "SDPWatchdog barked");
+        bool restarted = false;
+        do {
+            restarted = sdp.stopContinuous();
+            if (restarted) {
+                restarted = sdp.startContinuous(false);
+            }
+        } while (!restarted);
+        BSP_LOGI(TAG, "SDP restarted");
+        return true;
+    }
+
+    return false;
 }
 
 
@@ -133,14 +170,12 @@ static esp_err_t write_sdpinfo() {
 }
 
 
-
 static void sdptask_read_sensor() {
     bool success;
     SDPRecord sdp_record;  // diff pressure
     const Board_t *board = board_get();
     const int8_t is_bmp_same_wire = board->bmp_gpio.sda == board->sdp_gpio.sda
         || board->bmp_gpio.scl == board->sdp_gpio.scl;
-    int64_t bmp_last_update = -BMP280_SAMPLE_PERIOD_MS;
     const esp_err_t err_fail = ESP_FAIL;
 
     while (1) {
@@ -157,9 +192,10 @@ static void sdptask_read_sensor() {
             board->led_set_error();
         }
 
-        if (is_bmp_same_wire && (sdp_record.time - bmp_last_update) > BMP280_SAMPLE_PERIOD_MS) {
-            //record_bmp_read();
+        if (is_bmp_same_wire) {
+            record_bmp_read();
         }
+        sdp_watchdog_check(success);
     }
 }
 

@@ -12,7 +12,7 @@
 #include "esp_err.h"
 
 #define SDPSENSOR_SAMPLE_PERIOUD_US   1000
-#define BMP280_SAMPLE_PERIOD_MS       10000
+#define BMP280_SAMPLE_PERIOD_MS       1000
 
 
 // SDPxx sensor: diff pressure
