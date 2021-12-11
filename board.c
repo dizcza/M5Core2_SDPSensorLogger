@@ -183,7 +183,7 @@ void board_init() {
     }
 
     m_board.led_init();
-    xTaskCreatePinnedToCore(task_led_off, "led_off", 1024, NULL, LED_TASK_PRIORITY, NULL, PRO_CPU_NUM);
+    xTaskCreatePinnedToCore(task_led_off, "led_off", 1024, NULL, LED_TASK_PRIORITY, NULL, APP_CPU_NUM);
 }
 
 

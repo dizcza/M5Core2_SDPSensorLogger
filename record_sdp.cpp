@@ -148,7 +148,6 @@ static void sdptask_read_sensor() {
 
         sdp_record.time = esp_timer_get_time();
         success = sdp.readMeasurement(&sdp_record.diff_pressure_raw, NULL, NULL);
-        log_i("sdp took %lld us", esp_timer_get_time() - sdp_record.time);
 
         if (success) {
             xQueueSend(xQueueSDP, &sdp_record, portMAX_DELAY);
@@ -302,8 +301,8 @@ void record_sdp_start() {
     xQueueSDP = xQueueCreate( 5000 * RECORDS_BUFFER_SIZE, sizeof(SDPRecord) );
     xQueueSDPErrors = xQueueCreate( 100, sizeof(esp_err_t) );
 
-    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_read_sensor, "sdp_read", 2048, NULL, READ_SENSORS_PRIORITY, &read_sensor_task_handle, APP_CPU_NUM);
-    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_write, "sdp_write", 8192, NULL, WRITE_TO_SDCARD_PRIORITY, &write_task_handle, PRO_CPU_NUM);
+    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_read_sensor, "sdp_read", 2048, NULL, READ_SENSORS_PRIORITY, &read_sensor_task_handle, PRO_CPU_NUM);
+    xTaskCreatePinnedToCore((TaskFunction_t) sdptask_write, "sdp_write", 8192, NULL, WRITE_TO_SDCARD_PRIORITY, &write_task_handle, APP_CPU_NUM);
 
     // let SDP & BMP tasks start
     vTaskDelay(pdMS_TO_TICKS(1000));
