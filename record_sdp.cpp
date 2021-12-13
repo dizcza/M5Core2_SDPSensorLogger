@@ -25,7 +25,10 @@
 
 #define READ_SENSORS_PRIORITY    3
 #define WRITE_TO_SDCARD_PRIORITY 2
+
 #define WATCHDOG_UPDATE_MS       1000L
+#define LCD_HEADER_UPDATE_MS     5000L
+#define SD_WAIT_UNTIL_RESTART_MS 10L
 #define SDP_WATCHDOG_MAX_FAILS   3
 
 #define ESP32_SDPSENSOR_DEBUG         0
@@ -208,7 +211,7 @@ static FILE* open_fileSDP() {
     int64_t t_last = esp_timer_get_time();
     while (file == NULL) {
         int64_t t_curr = esp_timer_get_time();
-        if (t_curr - t_last > 100000) {
+        if (t_curr - t_last > SD_WAIT_UNTIL_RESTART_MS * 1000L) {
           SD.end();
           while (!SD.begin(TFCARD_CS_PIN, SPI, 40000000)) delay(10);
           BSP_LOGW(TAG, "SD restarted");
@@ -234,6 +237,22 @@ static void xqueue_check_errors() {
                     errors_cnt, n_total, esp_err_to_name(err));
         }
     }
+}
+
+
+static void update_lcd_header(long int fsize) {
+  static int64_t last_update = 0;
+  if (esp_timer_get_time() - last_update > LCD_HEADER_UPDATE_MS * 1000L) {
+      int16_t x = M5.lcd.getCursorX();
+      int16_t y = M5.lcd.getCursorY();
+      M5.Lcd.setCursor(0, 0);
+      M5.Lcd.setTextColor(LIGHTGREY);
+      M5.Lcd.setTextSize(2);
+      M5.lcd.fillRect(0, 0, 320, 16, BLACK);
+      M5.Lcd.printf("# %llu %lld Kb", records_received, fsize >> 10);
+      M5.Lcd.setCursor(x, y);
+      last_update = esp_timer_get_time();
+  }
 }
 
 
@@ -290,16 +309,20 @@ static void sdptask_write() {
                 }
             }
             wcnt = fwrite(sdp_records, sizeof(SDPRecord), RECORDS_BUFFER_SIZE, fileSDP);
-            while (wcnt != RECORDS_BUFFER_SIZE) {
-                BSP_LOGE(TAG, "fwrite(fileSDP) failed. Retrying...");
+            int fflush_res = fflush(fileSDP);
+            int fsync_res = fsync(fileno(fileSDP));
+
+            while (!(wcnt == RECORDS_BUFFER_SIZE && fflush_res == 0 && fsync_res == 0)) {
+                BSP_LOGE(TAG, "fwrite SDP failed");
                 board->led_set_error();
                 fclose(fileSDP);
                 fileSDP = open_fileSDP();
-                wcnt += fwrite(&sdp_records[wcnt], sizeof(SDPRecord), RECORDS_BUFFER_SIZE - wcnt, fileSDP);
+                wcnt = fwrite(sdp_records, sizeof(SDPRecord), RECORDS_BUFFER_SIZE, fileSDP);
+                fflush_res = fflush(fileSDP);
+                fsync_res = fsync(fileno(fileSDP));
+
             }
         } while (uxQueueMessagesWaiting(xQueueSDP) >= RECORDS_BUFFER_SIZE);
-        fflush(fileSDP);
-        fsync(fileno(fileSDP));
 
         if (print_update || ESP32_SDPSENSOR_DEBUG) {
             BSP_LOGI(TAG, "[q %u] [r %.0f %lld %lld] [dp %d]",
@@ -308,7 +331,7 @@ static void sdptask_write() {
                     dp_max);
         }
 
-        // TODO M5.Lcd print header info queue
+        update_lcd_header(ftell(fileSDP));
 
         vTaskDelay(sleep_ticks);
     }

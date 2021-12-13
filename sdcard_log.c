@@ -47,22 +47,15 @@ size_t sdcard_log(char *msg) {
         }
         const size_t len = strlen(msg);
         wcnt = fwrite(msg, sizeof(char), len, log_file);
-        if (wcnt != len) {
-            fclose(log_file);
-            log_file = open_log_file();
-            if (log_file == NULL) {
-                xSemaphoreGive(sync_sdcard_log);
-                return wcnt;
-            }
-            wcnt += fwrite(&msg[wcnt], sizeof(char), len - wcnt, log_file);
-        }
 		int fflush_res = fflush(log_file);
 		int fsync_res = fsync(fileno(log_file));
-        if (fflush_res != 0 || fsync_res != 0) {
+        if (wcnt != len || fflush_res != 0 || fsync_res != 0) {
             fclose(log_file);
             log_file = open_log_file();
             if (log_file != NULL) {
                 wcnt = fwrite(msg, sizeof(char), len, log_file);
+                fflush(log_file);
+                fsync(fileno(log_file));
             }
         }
 	}

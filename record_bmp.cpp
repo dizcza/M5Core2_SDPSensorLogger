@@ -98,19 +98,17 @@ static void bmp_write(const BMPRecord *bmp_record) {
 		return;
 	}
 	size_t wcnt = fwrite(bmp_record, sizeof(BMPRecord), 1, fileBMP);
-	if (wcnt != 1) {
-		BSP_LOGE(TAG, "fwrite BMP failed");
-		fclose(fileBMP);
-		fileBMP = open_fileBMP();
-		if (fileBMP == NULL) return;
-		wcnt = fwrite(bmp_record, sizeof(BMPRecord), 1, fileBMP);
-	}
 	int fflush_res = fflush(fileBMP);
 	int fsync_res = fsync(fileno(fileBMP));
-    if (fflush_res != 0 || fsync_res != 0) {
-        BSP_LOGE(TAG, "fflush BMP failed");
+    if (wcnt != 1 || fflush_res != 0 || fsync_res != 0) {
+        BSP_LOGE(TAG, "fwrite BMP failed");
         fclose(fileBMP);
         fileBMP = open_fileBMP();
+        if (fileBMP != NULL) {
+            wcnt = fwrite(bmp_record, sizeof(BMPRecord), 1, fileBMP);
+            fflush(fileBMP);
+            fsync(fileno(fileBMP));
+        }
     }
 }
 
